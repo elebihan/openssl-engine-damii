@@ -1,0 +1,12 @@
+openssl_conf = test_init
+
+[test_init]
+engines = engine_section
+
+[engine_section]
+damii = damii_section
+
+[damii_section]
+engine_id = damii
+dynamic_path = @LIBDIR@/damii.so
+init = 1
