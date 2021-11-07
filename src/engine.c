@@ -8,6 +8,8 @@
 
 #include <openssl/engine.h>
 #include <openssl/evp.h>
+#include <openssl/ossl_typ.h>
+#include <openssl/rsa.h>
 #include <stdbool.h>
 #include <stdio.h>
 

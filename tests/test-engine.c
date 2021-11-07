@@ -13,6 +13,7 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ossl_typ.h>
+#include <openssl/rsa.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -26,6 +27,9 @@
 
 #define TEST_CIPHER_PLAIN_FILE "test.plain.txt"
 #define TEST_CIPHER_CIPHERED_FILE "test.enc.aes_256_cbc.bin"
+#define TEST_RSA_PRIVATE_KEY "RSA-KEY-01"
+#define TEST_RSA_PLAIN_FILE "test.rsa.plain.bin"
+#define TEST_RSA_ENCRYPTED_FILE "test.rsa.enc.bin"
 
 /* clang-format off */
 static const unsigned char test_cipher_key[] = {
@@ -159,6 +163,80 @@ void test_cipher_aes_256_cbc(const char *tst_path, const char *ref_path, bool en
 	ENGINE_free(e);
 }
 
+static void test_rsa(const char *tst_path, const char *ref_path, bool encrypt)
+{
+	EVP_PKEY *pkey = NULL;
+	RSA *rsa = NULL;
+	ENGINE *e = NULL;
+	int ret = 0;
+	char path[PATH_MAX];
+	unsigned char *tst_data = NULL;
+	size_t tst_sz = 0;
+	unsigned char *ref_data = NULL;
+	size_t ref_sz = 0;
+	unsigned char *res_data = NULL;
+	size_t res_sz = 0;
+
+	e = ENGINE_by_id(OPENSSL_ENGINE_DAMII_ID);
+
+	if (!ENGINE_init(e)) {
+		ck_abort_msg("Failed to init engine");
+	}
+
+	snprintf(path, PATH_MAX, "%s/%s", test_data_dir, tst_path);
+
+	ret = slurp(path, (void **)&tst_data, &tst_sz);
+	if (ret != 0) {
+		ck_abort_msg("Failed to read test data");
+	}
+
+	fprintf(stderr, "Read %zu bytes for test data\n", tst_sz);
+
+	snprintf(path, PATH_MAX, "%s/%s", test_data_dir, ref_path);
+
+	ret = slurp(path, (void **)&ref_data, &ref_sz);
+	if (ret != 0) {
+		ck_abort_msg("Failed to read reference data");
+	}
+
+	fprintf(stderr, "Read %zu bytes for reference data\n", ref_sz);
+
+	if (encrypt) {
+		pkey = ENGINE_load_public_key(e, TEST_RSA_PRIVATE_KEY, NULL, NULL);
+	} else {
+		pkey = ENGINE_load_private_key(e, TEST_RSA_PRIVATE_KEY, NULL, NULL);
+	}
+	ck_assert_ptr_nonnull(pkey);
+
+	rsa = EVP_PKEY_get1_RSA(pkey);
+	ck_assert_ptr_nonnull(rsa);
+
+	res_data = malloc(sizeof(uint8_t) * RSA_size(rsa));
+	if (res_data == NULL) {
+		ck_abort_msg("Failed to allocate output");
+	}
+
+	if (encrypt) {
+		ret = RSA_public_encrypt(tst_sz, tst_data, res_data, rsa, RSA_NO_PADDING);
+	} else {
+		ret = RSA_private_decrypt(tst_sz, tst_data, res_data, rsa, RSA_NO_PADDING);
+	}
+
+	ck_assert_int_ne(ret, -1);
+
+	res_sz = ret;
+	ck_assert(res_sz == ref_sz);
+
+	ret = memcmp(ref_data, res_data, ref_sz);
+	ck_assert_int_eq(ret, 0);
+
+	free(tst_data);
+	free(ref_data);
+	free(res_data);
+
+	EVP_PKEY_free(pkey);
+}
+
 void setup(void)
 {
 	int rc = 0;
@@ -219,11 +297,24 @@ START_TEST(test_engine_can_decrypt_aes_256_cbc)
 }
 END_TEST
 
+START_TEST(test_engine_can_encrypt_rsa)
+{
+	test_rsa(TEST_RSA_PLAIN_FILE, TEST_RSA_ENCRYPTED_FILE, true);
+}
+END_TEST
+
+START_TEST(test_engine_can_decrypt_rsa)
+{
+	test_rsa(TEST_RSA_ENCRYPTED_FILE, TEST_RSA_PLAIN_FILE, false);
+}
+END_TEST
+
 Suite *engine_suite(void)
 {
 	Suite *s = NULL;
 	TCase *tc_init = NULL;
 	TCase *tc_cipher = NULL;
+	TCase *tc_rsa = NULL;
 
 	s = suite_create("DAMII");
 
@@ -238,6 +329,12 @@ Suite *engine_suite(void)
 	tcase_add_test(tc_cipher, test_engine_can_encrypt_aes_256_cbc);
 	tcase_add_test(tc_cipher, test_engine_can_decrypt_aes_256_cbc);
 	suite_add_tcase(s, tc_cipher);
+
+	tc_rsa = tcase_create("RSA");
+	tcase_add_checked_fixture(tc_rsa, setup, teardown);
+	tcase_add_test(tc_rsa, test_engine_can_decrypt_rsa);
+	tcase_add_test(tc_rsa, test_engine_can_encrypt_rsa);
+	suite_add_tcase(s, tc_rsa);
 
 	return s;
 }

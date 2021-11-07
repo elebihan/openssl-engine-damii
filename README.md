@@ -73,6 +73,16 @@ openssl s_client -CAfile ca.cert.pem \
     -connect localhost:5555
 ```
 
+Encrypt with RSA Public key:
+
+```sh
+export OPENSSL_CONF=${prefix}/share/openssl-engine-damii/engine.conf
+openssl rsautl -engine damii \
+    -inkey "RSA-KEY-01" -keyform engine \
+    -encrypt -in tests/data/test.rsa.plain.bin \
+    -out test.rsa.enc.bin
+```
+
 ## License
 
 This project is distributed under the terms of the MIT license.

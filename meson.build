@@ -53,6 +53,7 @@ config_h = configure_file(output : 'config.h',
 openssl = dependency('openssl', required : true, version : '>=1.1')
 crypto = dependency('libcrypto', required : true, version : '>=1.1')
 tomcrypt = dependency('libtomcrypt', required : true, version : '>=1.18')
+tommath = dependency('libtommath', required : true, version : '>=1.0')
 
 subdir('data')
 subdir('src')

@@ -6,11 +6,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <openssl/bio.h>
+#include <openssl/bn.h>
+#include <openssl/crypto.h>
 #include <openssl/engine.h>
 #include <openssl/evp.h>
 #include <openssl/ossl_typ.h>
+#include <openssl/rsa.h>
+#include <openssl/x509_vfy.h>
 #include <stdlib.h>
 #include <string.h>
+#include <tommath.h>
 #include <tomcrypt.h>
 
 #include "context.h"
@@ -48,18 +54,30 @@ int ctx_destroy(DAMII_CTX *ctx)
 	return 1;
 }
 
+static inline int ctx_load_keys(DAMII_CTX *ctx)
+{
+	ctx->keys = keys;
+	ctx->n_keys = sizeof(keys) / sizeof(keys[0]);
+	ctx->key_idx = 0;
+
+	return 1;
+}
+
 DAMII_CTX *ctx_new(void)
 {
 	DAMII_CTX *ctx = NULL;
+	int ret = 0;
 
 	ctx = OPENSSL_malloc(sizeof(DAMII_CTX));
 	if (ctx == NULL) {
 		return NULL;
 	}
 
-	ctx->keys = keys;
-	ctx->n_keys = sizeof(keys) / sizeof(keys[0]);
-	ctx->key_idx = 0;
+	ret = ctx_load_keys(ctx);
+	if (ret == 0) {
+		ctx_destroy(ctx);
+		ctx = NULL;
+	}
 
 	return ctx;
 }
@@ -85,16 +103,83 @@ int ctx_select_key(DAMII_CTX *ctx, const char *label)
 
 	return 0;
 }
-EVP_PKEY *
-ctx_load_pubkey(DAMII_CTX *ctx, const char *s_key_id, UI_METHOD *ui_method, void *callback_data)
+
+static EVP_PKEY *ctx_make_rsa_key(DAMII_CTX *ctx, int pub)
 {
+	DAMII_RSA_KEY *rsa_key = NULL;
+	EVP_PKEY *pkey = NULL;
+	RSA *rsa = NULL;
+	RSA *tmp = NULL;
+	BIO *in = NULL;
+	int ret = 0;
+
+	pkey = EVP_PKEY_new();
+	if (pkey == NULL) {
+		return NULL;
+	}
+
+	rsa_key = &ctx->keys[ctx->key_idx].key.rsa_key;
+	in = BIO_new_mem_buf(rsa_key->key, rsa_key->key_sz);
+	if (in == NULL) {
+		goto error;
+	}
+
+	rsa = PEM_read_bio_RSAPrivateKey(in, &rsa, NULL, NULL);
+	if (rsa == NULL) {
+		goto error;
+	}
+
+	if (pub) {
+		tmp = RSAPublicKey_dup(rsa);
+		RSA_free(rsa);
+		if (tmp == NULL) {
+			goto error;
+		} else {
+			rsa = tmp;
+		}
+	}
+
+	ret = EVP_PKEY_assign_RSA(pkey, rsa);
+	if (ret == 0) {
+		RSA_free(rsa);
+		goto error;
+	}
+
+	ret = RSA_set_app_data(rsa, ctx);
+	if (ret == 0) {
+		goto error;
+	}
+
+	return pkey;
+
+error:
+	EVP_PKEY_free(pkey);
 	return NULL;
 }
 
-EVP_PKEY *
-ctx_load_privkey(DAMII_CTX *ctx, const char *s_key_id, UI_METHOD *ui_method, void *callback_data)
+static EVP_PKEY *ctx_load_key(DAMII_CTX *ctx, const char *key_id, int pub)
 {
-	return NULL;
+	EVP_PKEY *pkey = NULL;
+	int ret = 0;
+
+	ret = ctx_select_key(ctx, key_id);
+	if (ret == 1) {
+		pkey = ctx_make_rsa_key(ctx, pub);
+	}
+
+	return pkey;
+}
+
+EVP_PKEY *
+ctx_load_pubkey(DAMII_CTX *ctx, const char *key_id, UI_METHOD *ui_method, void *callback_data)
+{
+	return ctx_load_key(ctx, key_id, 1);
+}
+
+EVP_PKEY *
+ctx_load_privkey(DAMII_CTX *ctx, const char *key_id, UI_METHOD *ui_method, void *callback_data)
+{
+	return ctx_load_key(ctx, key_id, 0);
 }
 
 int ctx_aes_cbc_init(DAMII_CTX *ctx, const unsigned char *key, const unsigned char *iv, int enc)
@@ -133,7 +218,7 @@ int ctx_aes_cbc_do_cipher(DAMII_CTX *ctx, unsigned char *out, const unsigned cha
 	}
 
 	if (ret != CRYPT_OK) {
-		fprintf(stderr, "Failed to %s\n", ctx->encrypt? "encrypt": "decrypt");
+		fprintf(stderr, "Failed to %s\n", ctx->encrypt ? "encrypt" : "decrypt");
 		ret = -3;
 	} else {
 		ret = 1;
