@@ -30,6 +30,8 @@
 #define TEST_RSA_PRIVATE_KEY "RSA-KEY-01"
 #define TEST_RSA_PLAIN_FILE "test.rsa.plain.bin"
 #define TEST_RSA_ENCRYPTED_FILE "test.rsa.enc.bin"
+#define TEST_SIGN_PLAIN_FILE "test.needpadding.plain.txt"
+#define TEST_SIGN_SIG_FILE "test.needpadding.plain.txt.rsa"
 
 /* clang-format off */
 static const unsigned char test_cipher_key[] = {
@@ -108,6 +110,18 @@ static void init_engine_or_die(ENGINE **e, const char *msg)
 		ck_abort_msg(msg);
 	}
 }
+
+static void sha256sum_or_die(void *data, size_t length, void **hash, const char *msg)
+{
+	SHA256_CTX sha256;
+
+	alloc_or_die(256, hash, "Failed to allocate memeory for hash");
+
+	SHA256_Init(&sha256);
+	SHA256_Update(&sha256, data, length);
+	SHA256_Final(*hash, &sha256);
+}
+
 void test_cipher_aes_256_cbc(const char *tst_path, const char *ref_path, bool encrypt)
 {
 	ENGINE *e = NULL;
@@ -227,6 +241,51 @@ static void test_rsa(const char *tst_path, const char *ref_path, bool encrypt)
 	EVP_PKEY_free(pkey);
 }
 
+static void test_sign(const char *tst_path, const char *ref_path, int sign)
+{
+	EVP_PKEY *pkey = NULL;
+	RSA *rsa = NULL;
+	ENGINE *e = NULL;
+	unsigned char *tst_data = NULL;
+	size_t tst_sz = 0;
+	unsigned char *ref_data = NULL;
+	size_t ref_sz = 0;
+	unsigned char *res_data = NULL;
+	size_t res_sz = 0;
+	unsigned char *hash = NULL;
+	int ret;
+
+	init_engine_or_die(&e, "Failed to init engine");
+	slurp_or_die(tst_path, (void **)&tst_data, &tst_sz, "Failed to read test data");
+	slurp_or_die(ref_path, (void **)&ref_data, &ref_sz, "Failed to read reference data");
+
+	pkey = ENGINE_load_private_key(e, TEST_RSA_PRIVATE_KEY, NULL, NULL);
+	ck_assert_ptr_nonnull(pkey);
+
+	rsa = EVP_PKEY_get1_RSA(pkey);
+	ck_assert_ptr_nonnull(rsa);
+
+	sha256sum_or_die(tst_data, tst_sz, (void **)&hash, "Failed to hash test data");
+
+	res_sz = sizeof(unsigned char) * RSA_size(rsa);
+	alloc_or_die(res_sz, (void **)&res_data, "Failed to allocate memory for result");
+
+	if (sign) {
+		ret = RSA_sign(NID_sha256, hash, 32, res_data, (unsigned int*)&res_sz, rsa);
+	} else {
+		ret = RSA_verify(NID_sha256, hash, 32, ref_data, ref_sz, rsa);
+	}
+
+	ck_assert_int_eq(ret, 1);
+
+	free(hash);
+	free(tst_data);
+	free(ref_data);
+	free(res_data);
+
+	EVP_PKEY_free(pkey);
+}
+
 void setup(void)
 {
 	int rc = 0;
@@ -299,6 +358,18 @@ START_TEST(test_engine_can_decrypt_rsa)
 }
 END_TEST
 
+START_TEST(test_engine_can_sign_rsa)
+{
+	test_sign(TEST_SIGN_PLAIN_FILE, TEST_SIGN_SIG_FILE, true);
+}
+END_TEST
+
+START_TEST(test_engine_can_verify_rsa)
+{
+	test_sign(TEST_SIGN_PLAIN_FILE, TEST_SIGN_SIG_FILE, false);
+}
+END_TEST
+
 Suite *engine_suite(void)
 {
 	Suite *s = NULL;
@@ -324,6 +395,8 @@ Suite *engine_suite(void)
 	tcase_add_checked_fixture(tc_rsa, setup, teardown);
 	tcase_add_test(tc_rsa, test_engine_can_decrypt_rsa);
 	tcase_add_test(tc_rsa, test_engine_can_encrypt_rsa);
+	tcase_add_test(tc_rsa, test_engine_can_sign_rsa);
+	tcase_add_test(tc_rsa, test_engine_can_verify_rsa);
 	suite_add_tcase(s, tc_rsa);
 
 	return s;
